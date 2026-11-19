@@ -1,0 +1,42 @@
+name: Publish sectional chart
+on:
+  schedule:
+    - cron: "17 12 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: sectional-chart
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Identify current FAA cycle
+        id: cycle
+        run: |
+          anchor=$(date -u -d 2026-10-29 +%s)
+          now=$(date -u +%s)
+          tag=sectional-$((anchor + (now-anchor)/(56*86400)*(56*86400)))
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --json isDraft --jq .isDraft | grep -qx false; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.cycle.outputs.ready != 'true'
+        with:
+          python-version: "3.12"
+      - name: Assemble regional chart
+        if: steps.cycle.outputs.ready != 'true'
+        run: |
+          pip install Pillow==12.2.0
+          python build_chart.py
+      - name: Publish chart assets separately from firmware
+        if: steps.cycle.outputs.ready != 'true'
+        env:
+          TAG: ${{ steps.cycle.outputs.tag }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --prerelease --latest=false --title "Regional sectional $(date -u -d @${TAG#sectional-} +%F)" --notes "FAA sectional imagery prepared for local map storage."
+          gh release upload "$TAG" dist/* --clobber
+          gh release edit "$TAG" --draft=false --prerelease --latest=false
